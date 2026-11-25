@@ -105,7 +105,9 @@ const DEFAULT_STATE = () => ({
   debts: [],       // { id, name, installment, nextDate, freq, remaining, anchor, paid: [{ due, date, amount }] }
   routines: [],    // { id, name, focus, color, items: [{ exId, sets, reps, weight }] }
   exercises: {},   // id -> { id, name, muscle, img, custom }
-  gym: {}          // 'YYYY-MM-DD' -> id de rutina o 'libre'
+  gym: {},         // 'YYYY-MM-DD' -> id de rutina o 'libre'
+  workout: null,   // entrenamiento en curso: { routineId, name, date, start, ex: [{ exId, sets: [{ w, reps, done }] }] }
+  sessions: []     // entrenamientos terminados: { id, routineId, name, date, start, end, ex: [...] }
 });
 let S = DEFAULT_STATE();
 let saveTimer = null;
@@ -965,6 +967,12 @@ function viewGym() {
   return `
   <header class="top"><div><h1>Gym</h1><p class="sub">${isWeekend(t) ? 'Fin de semana: tu racha está a salvo' : 'De lunes a viernes; el finde no rompe la racha'}</p></div></header>
 
+  ${S.workout ? `<button type="button" class="card wk-banner" data-act="wkResume" aria-label="Volver al entrenamiento en curso">
+    <span class="li-main"><span class="muted small">Entrenamiento en curso</span><b>${esc((routineById(S.workout.routineId) || S.workout).name)}</b></span>
+    <span class="wk-timer sm" id="wkTimer">${fmtClock(Date.now() - S.workout.start)}</span>
+    <span class="chev" aria-hidden="true">${I.right}</span>
+  </button>` : ''}
+
   <section class="card" aria-label="Racha">
     <div class="streak">
       <div class="flame${st ? '' : ' off'}">${I.flame}</div>
@@ -989,9 +997,115 @@ function viewGym() {
   </section>`;
 }
 
+// ---------- Entrenamiento ----------
+const kg = (w) => `${numFmt.format(num(w))} kg`;
+function fmtClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}:${pad(m)}:${pad(x)}` : `${pad(m)}:${pad(x)}`;
+}
+const fmtMin = (ms) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; };
+// Lo último que hiciste de un ejercicio: primero en esta misma rutina, si no, en cualquiera.
+function lastSets(routineId, exId) {
+  const ss = S.sessions || [];
+  for (const sameRoutine of [true, false]) {
+    for (let i = ss.length - 1; i >= 0; i--) {
+      const s = ss[i];
+      if (sameRoutine && s.routineId !== routineId) continue;
+      const e = s.ex.find((x) => x.exId === exId);
+      const done = e ? e.sets.filter((x) => x.done) : [];
+      if (done.length) return { date: s.date, sets: done };
+    }
+  }
+  return null;
+}
+const lastSession = (routineId) => [...(S.sessions || [])].reverse().find((s) => s.routineId === routineId);
+function deltaBadge(now, before) {
+  const d = Math.round((num(now) - num(before)) * 100) / 100;
+  if (d > 0) return `<span class="delta up">▲ +${numFmt.format(d)} kg</span>`;
+  if (d < 0) return `<span class="delta down">▼ −${numFmt.format(-d)} kg</span>`;
+  return '<span class="delta">= igual</span>';
+}
+function startWorkout(r) {
+  S.workout = {
+    routineId: r.id, name: r.name, date: todayIso(), start: Date.now(),
+    ex: r.items.map((it) => {
+      const prev = lastSets(r.id, it.exId);
+      const n = Math.max(1, Math.round(num(it.sets)) || (prev ? prev.sets.length : 3));
+      const sets = [];
+      for (let i = 0; i < n; i++) {
+        const p = prev && (prev.sets[i] || prev.sets[prev.sets.length - 1]);
+        sets.push({ w: p ? p.w : (it.weight || ''), reps: p ? p.reps : (it.reps || ''), done: false });
+      }
+      return { exId: it.exId, sets };
+    })
+  };
+}
+
+function viewWorkout(w, r) {
+  const total = sum(w.ex, (e) => e.sets.length);
+  const done = sum(w.ex, (e) => e.sets.filter((x) => x.done).length);
+  const cards = w.ex.map((e, ei) => {
+    const ex = S.exercises[e.exId] || { name: 'Ejercicio', muscle: '' };
+    const prev = lastSets(w.routineId, e.exId);
+    const rows = e.sets.map((st, si) => {
+      const p = prev && prev.sets[si];
+      return `<div class="set${st.done ? ' done' : ''}">
+        <div class="set-row">
+          <span class="set-n">${si + 1}</span>
+          <div class="wstep">
+            <button type="button" data-act="wkStep" data-e="${ei}" data-s="${si}" data-d="-2.5" aria-label="Bajar peso de la serie ${si + 1}">−</button>
+            <input type="number" inputmode="decimal" min="0" step="0.5" value="${esc(st.w)}" placeholder="kg" data-change="wkSet" data-e="${ei}" data-s="${si}" data-k="w" aria-label="Peso de la serie ${si + 1} en kg">
+            <button type="button" data-act="wkStep" data-e="${ei}" data-s="${si}" data-d="2.5" aria-label="Subir peso de la serie ${si + 1}">+</button>
+          </div>
+          <input class="reps" type="text" inputmode="numeric" maxlength="6" value="${esc(st.reps)}" placeholder="reps" data-change="wkSet" data-e="${ei}" data-s="${si}" data-k="reps" aria-label="Repeticiones de la serie ${si + 1}">
+          <button type="button" class="set-check" data-act="wkDone" data-e="${ei}" data-s="${si}" aria-pressed="${!!st.done}" aria-label="Serie ${si + 1} hecha">${I.check}</button>
+        </div>
+        <div class="set-prev">${p ? `Última vez: ${kg(p.w)} × ${esc(p.reps || '—')} ${st.w !== '' ? deltaBadge(st.w, p.w) : ''}` : 'Primera vez con esta serie'}</div>
+      </div>`;
+    }).join('');
+    const eDone = e.sets.filter((x) => x.done).length;
+    return `<div class="ex">
+      <div class="ex-head">
+        <div class="ex-img sm">${imgOrPh(ex.img, ex.name)}</div>
+        <div class="grow">
+          <div class="ex-name">${esc(ex.name)}</div>
+          <div class="muted small">${eDone} de ${e.sets.length} series${prev ? ` · última vez el ${fmtShort(prev.date)}` : ''}</div>
+        </div>
+      </div>
+      <div class="set-head"><span>Serie</span><span>Peso (kg)</span><span>Reps</span><span>Hecha</span></div>
+      ${rows}
+      <div class="row">
+        <button type="button" class="btn-sm grow" data-act="wkAddSet" data-e="${ei}">${I.plus} Serie</button>
+        ${e.sets.length > 1 ? `<button type="button" class="btn-sm grow" data-act="wkDelSet" data-e="${ei}">Quitar serie</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  const color = r ? r.color : '#a3abb9';
+  return `
+  <div><button type="button" class="back" data-act="closeRoutine">${I.back} Rutinas</button></div>
+  <header class="top">
+    <div class="row">
+      <span class="r-badge" style="background:${color}">${routineTag(r)}</span>
+      <div><h1>${esc(r ? r.name : w.name)}</h1><p class="sub">Entrenando · ${done} de ${total} series</p></div>
+    </div>
+  </header>
+  <section class="card wk-card" aria-label="Tiempo de entrenamiento">
+    <div class="muted small">Llevas entrenando</div>
+    <div class="wk-timer" id="wkTimer" role="timer">${fmtClock(Date.now() - w.start)}</div>
+    <div class="bar" aria-hidden="true"><i style="width:${total ? (done / total) * 100 : 0}%;background:var(--in)"></i></div>
+  </section>
+  ${cards}
+  <button type="button" class="btn wide" data-act="wkFinish">${I.check} Terminar rutina</button>
+  <button type="button" class="btn danger wide" data-act="wkCancel">Cancelar entrenamiento</button>`;
+}
+
 function viewRoutine(r) {
+  if (S.workout && S.workout.routineId === r.id) return viewWorkout(S.workout, r);
+  const ls = lastSession(r.id);
   const items = r.items.map((it, i) => {
     const ex = S.exercises[it.exId] || { name: 'Ejercicio', muscle: '' };
+    const prev = lastSets(r.id, it.exId);
     return `<div class="ex">
       <div class="ex-head">
         <button type="button" class="ex-img" data-act="exPhoto" data-ex="${esc(it.exId)}" aria-label="Cambiar foto de ${esc(ex.name)}">${imgOrPh(ex.img, ex.name)}</button>
@@ -1006,8 +1120,10 @@ function viewRoutine(r) {
         <label class="field"><span>Reps</span><input type="text" inputmode="text" maxlength="8" value="${esc(it.reps)}" data-change="item" data-i="${i}" data-k="reps"></label>
         <label class="field"><span>Peso (kg)</span><input type="number" inputmode="decimal" min="0" step="0.5" value="${esc(it.weight)}" data-change="item" data-i="${i}" data-k="weight"></label>
       </div>
+      ${prev ? `<div class="muted small">Última vez (${fmtShort(prev.date)}): ${prev.sets.map((x) => `${kg(x.w)} × ${esc(x.reps || '—')}`).join(' · ')}</div>` : ''}
     </div>`;
   }).join('');
+  const other = S.workout && S.workout.routineId !== r.id ? S.workout : null;
   return `
   <div><button type="button" class="back" data-act="closeRoutine">${I.back} Rutinas</button></div>
   <header class="top">
@@ -1017,6 +1133,10 @@ function viewRoutine(r) {
     </div>
     <button type="button" class="icon-btn" data-act="editRoutine" aria-label="Editar rutina">${I.edit}</button>
   </header>
+  ${r.items.length ? `<section class="card" aria-label="Entrenar">
+    <button type="button" class="btn wide" data-act="wkStart">${I.dumbbell} Empezar entrenamiento</button>
+    <div class="muted small">${other ? `Tienes ${esc(other.name)} en curso.` : ls ? `Última vez: ${fmtLong(ls.date)} · ${fmtMin(ls.end - ls.start)}` : 'Todavía no has entrenado esta rutina con el cronómetro.'}</div>
+  </section>` : ''}
   ${items || '<section class="card"><p class="empty">Agrega ejercicios desde la biblioteca o crea los tuyos con tu propia foto.</p></section>'}
   <button type="button" class="btn wide" data-act="addExercise">${I.plus} Agregar ejercicio</button>`;
 }
@@ -1336,6 +1456,68 @@ const ACT = {
   },
   openRoutine(el) { ui.routineId = el.dataset.id; history.pushState({ routine: 1 }, ''); render(); scrollTo(0, 0); },
   closeRoutine() { if (history.state && history.state.routine) history.back(); else { ui.routineId = null; render(); } },
+  // Entrenamiento
+  wkStart() {
+    const r = currentRoutine();
+    if (!r || !r.items.length) return toast('Agrega ejercicios primero');
+    if (S.workout && S.workout.routineId !== r.id && !confirm(`Tienes ${S.workout.name} en curso. ¿Descartarlo y empezar ${r.name}?`)) return;
+    startWorkout(r);
+    save(); render(); scrollTo(0, 0); toast('¡A darle! El cronómetro ya está corriendo');
+  },
+  wkResume() {
+    const w = S.workout;
+    if (!w || !routineById(w.routineId)) return;
+    ui.routineId = w.routineId; history.pushState({ routine: 1 }, ''); render(); scrollTo(0, 0);
+  },
+  wkStep(el) {
+    const st = S.workout && S.workout.ex[+el.dataset.e].sets[+el.dataset.s];
+    if (!st) return;
+    st.w = String(Math.max(0, Math.round((num(st.w) + num(el.dataset.d)) * 100) / 100));
+    save(); render();
+  },
+  wkDone(el) {
+    const w = S.workout;
+    const st = w && w.ex[+el.dataset.e].sets[+el.dataset.s];
+    if (!st) return;
+    st.done = !st.done;
+    save(); render();
+    if (st.done && w.ex.every((e) => e.sets.every((x) => x.done))) toast('¡Todas las series listas! Toca «Terminar rutina»');
+  },
+  wkAddSet(el) {
+    const e = S.workout && S.workout.ex[+el.dataset.e];
+    if (!e) return;
+    const last = e.sets[e.sets.length - 1] || { w: '', reps: '' };
+    e.sets.push({ w: last.w, reps: last.reps, done: false });
+    save(); render();
+  },
+  wkDelSet(el) {
+    const e = S.workout && S.workout.ex[+el.dataset.e];
+    if (!e || e.sets.length < 2) return;
+    e.sets.pop();
+    save(); render();
+  },
+  wkFinish() {
+    const w = S.workout;
+    if (!w) return;
+    const left = sum(w.ex, (e) => e.sets.filter((x) => !x.done).length);
+    const doneN = sum(w.ex, (e) => e.sets.filter((x) => x.done).length);
+    if (!doneN) return toast('Marca al menos una serie como hecha');
+    if (left && !confirm(`Te faltan ${left} serie${left === 1 ? '' : 's'} por marcar. ¿Terminar igual?`)) return;
+    const before = streak();
+    const end = Date.now();
+    S.sessions = S.sessions || [];
+    S.sessions.push({ id: uid(), routineId: w.routineId, name: w.name, date: w.date, start: w.start, end, ex: w.ex });
+    S.gym[w.date] = w.routineId;
+    S.workout = null;
+    save(); render(); scrollTo(0, 0);
+    const after = streak();
+    toast(`¡Rutina terminada en ${fmtMin(end - w.start)}!${after > before ? ` Racha de ${after} día${after === 1 ? '' : 's'}` : ''}`);
+  },
+  wkCancel() {
+    if (!S.workout || !confirm('¿Cancelar este entrenamiento? No se guardará nada de lo que llevas.')) return;
+    S.workout = null;
+    save(); render(); toast('Entrenamiento cancelado');
+  },
   addExercise() { openSheet(pickerSheet()); if (ui.pickerTab === 'lib') renderLibResults(); },
   pickerTab(el) { ui.pickerTab = el.dataset.t; $('#sheetBody').innerHTML = pickerSheet(); if (ui.pickerTab === 'lib') renderLibResults(); },
   libGroup(el) {
@@ -1537,6 +1719,18 @@ const CHANGE = {
     }
     save(); render(); toast('Guardado');
   },
+  wkSet(el) {
+    const st = S.workout && S.workout.ex[+el.dataset.e].sets[+el.dataset.s];
+    if (!st) return;
+    st[el.dataset.k] = el.dataset.k === 'w' ? (el.value === '' ? '' : String(Math.max(0, num(el.value)))) : el.value.trim();
+    save();
+    // Sin redibujar toda la pantalla (así no se pierde el toque en el siguiente botón): solo la comparación.
+    const e = S.workout.ex[+el.dataset.e];
+    const prev = lastSets(S.workout.routineId, e.exId);
+    const p = prev && prev.sets[+el.dataset.s];
+    const box = el.closest('.set') && el.closest('.set').querySelector('.set-prev');
+    if (box && p) box.innerHTML = `Última vez: ${kg(p.w)} × ${esc(p.reps || '—')} ${st.w !== '' ? deltaBadge(st.w, p.w) : ''}`;
+  },
   item(el) {
     const r = currentRoutine();
     const it = r && r.items[+el.dataset.i];
@@ -1573,6 +1767,12 @@ window.addEventListener('popstate', () => {
   const st = history.state || {};
   if (ui.routineId && !st.routine && !st.sheet) { ui.routineId = null; render(); }
 });
+
+// Cronómetro del entrenamiento: se calcula desde la hora de inicio, así sigue bien aunque cierres la app.
+setInterval(() => {
+  const el = document.getElementById('wkTimer');
+  if (el && S.workout) el.textContent = fmtClock(Date.now() - S.workout.start);
+}, 1000);
 
 // ---------- Arranque ----------
 (async function boot() {
