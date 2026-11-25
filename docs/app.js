@@ -146,6 +146,9 @@ function payDate(p) {
   if (p.h === 1) return `${p.y}-${pad(p.m)}-${pad(Math.min(30, lastDay(p.y, p.m)))}`;
   return p.m === 12 ? `${p.y + 1}-01-15` : `${p.y}-${pad(p.m + 1)}-15`;
 }
+// La plata de un pago se usa en la quincena que sigue a la fecha del pago:
+// lo que llega el 15 es para el 16–fin de mes y lo que llega el 30 es para el 1–15 del mes siguiente.
+const moneyP = (date) => pNext(periodOf(date));
 ui.period = periodOf(today0);
 
 // ---------- Cálculos de trabajo ----------
@@ -224,8 +227,9 @@ function incomeFor(p, forProjection) {
   const cur = periodOf(todayIso());
   const parts = [];
 
-  // 1) Pago por horas: llega en esta quincena lo trabajado en la anterior.
-  const worked = pPrev(p);
+  // 1) Pago por horas: lo trabajado hace dos quincenas se paga al cierre de la quincena
+  //    anterior, y esa plata es la que tienes para esta.
+  const worked = pPrev(pPrev(p));
   const hk = pkey(worked);
   const real = S.received[hk];
   const hasReal = real != null && real !== '';
@@ -246,16 +250,17 @@ function incomeFor(p, forProjection) {
     });
   }
 
-  // 2) Sueldo fijo.
-  if (salaryActive(p)) {
-    const sk = 'sal-' + pkey(p);
+  // 2) Sueldo fijo: el que se pagó al cierre de la quincena anterior.
+  const sp = pPrev(p);
+  if (salaryActive(sp)) {
+    const sk = 'sal-' + pkey(sp);
     const r2 = S.received[sk];
     const has2 = r2 != null && r2 !== '';
-    const base = salaryFor(p);
+    const base = salaryFor(sp);
     if (base > 0 || has2) {
       parts.push({
-        kind: 'salary', key: sk, amount: has2 ? num(r2) : base, tag: has2 ? 'real' : 'sueldo', payOn: salaryPayDate(p), label: 'Sueldo',
-        note: `Pago del ${fmtShort(salaryPayDate(p))} · ${S.settings.salaryFreq === 'monthly' ? 'sueldo del mes' : 'mitad del sueldo'}`
+        kind: 'salary', key: sk, amount: has2 ? num(r2) : base, tag: has2 ? 'real' : 'sueldo', payOn: salaryPayDate(sp), label: 'Sueldo',
+        note: `Pago del ${fmtShort(salaryPayDate(sp))} · ${S.settings.salaryFreq === 'monthly' ? 'sueldo del mes' : 'mitad del sueldo'}`
       });
     }
   }
@@ -269,7 +274,7 @@ function nextPayments() {
   const t = todayIso();
   const cur = periodOf(t);
   const out = [];
-  for (const p of [cur, pNext(cur)]) for (const x of incomeFor(p, false).parts) if (x.payOn >= t) out.push(x);
+  for (const p of [cur, pNext(cur), pNext(pNext(cur))]) for (const x of incomeFor(p, false).parts) if (x.payOn >= t) out.push(x);
   return out.sort((a, b) => (a.payOn < b.payOn ? -1 : 1)).slice(0, 3);
 }
 function periodMoney(p, forProjection) {
@@ -1159,7 +1164,7 @@ const ACT = {
   goToday() { ui.workDate = todayIso(); ui.period = periodOf(ui.workDate); render(); },
   pickDay(el) { ui.workDate = el.dataset.date; ui.period = periodOf(ui.workDate); render(); scrollTo({ top: 0, behavior: 'smooth' }); },
   // Lleva a Dinero, a la quincena en que llega ese pago.
-  goMoney(el) { ui.period = periodOf(el.dataset.date); setTab('dinero'); },
+  goMoney(el) { ui.period = moneyP(el.dataset.date); setTab('dinero'); },
   confirmPay(el) {
     S.received[el.dataset.key] = num(el.dataset.amount);
     save(); render(); toast('Pago registrado en Dinero');
