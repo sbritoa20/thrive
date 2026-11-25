@@ -48,7 +48,8 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(
       caches.open(SHELL_CACHE).then(async (c) => {
         try {
-          const res = await fetch(req);
+          // no-cache: siempre pregunta a GitHub si hay versión nueva (sin esperar los 10 min de caché).
+          const res = await fetch(req, { cache: 'no-cache' });
           if (res.ok) c.put(req, res.clone());
           return res;
         } catch {
