@@ -681,9 +681,25 @@ function viewDinero() {
       <div class="li-main"><b>${esc(x.desc || x.src)}</b><small>${esc(x.src)} · ${fmtShort(x.date)}</small></div>
       <span class="amt in">+${money(x.amount)}</span></button>`).join('');
 
-  const debtLines = m.debtItems.map((x) => `<div class="li">
-      <div class="li-main"><b>${esc(x.debt.name)}</b><small>${fmtShort(x.date)} · ${x.paid ? 'pagada' : 'pendiente'}</small></div>
-      <span class="amt out">−${money(x.amount)}</span></div>`).join('');
+  // Cuotas que vencen en esta quincena (pagadas o pendientes).
+  const dueBadge = (date) => debtBadge({ remaining: 1, nextDate: date });
+  const debtItemCard = (x) => {
+    const d = x.debt;
+    const paid = d.paid || [];
+    const total = paid.length + (d.remaining || 0);
+    const n = x.paid ? paid.findIndex((q) => q.due === x.date) + 1 : paid.length + occurrences(d, d.nextDate, x.date).length;
+    const isNext = !x.paid && x.date === d.nextDate;
+    const isLastPaid = x.paid && paid.length && paid[paid.length - 1].due === x.date;
+    return `<div class="debt${x.paid ? ' done' : ''}">
+      <div class="debt-top"><div><b>${esc(d.name)}</b><small>${d.freq === 'once' ? 'Pago único' : `Cuota ${n} de ${total}`} · ${fmtLong(x.date)}</small></div>${x.paid ? '<span class="badge ok">Pagada</span>' : dueBadge(x.date)}</div>
+      <div class="debt-meta">Valor de la cuota <b>${money(x.amount)}</b>${!x.paid && d.freq !== 'once' ? ` · Total pendiente <b>${money(d.remaining * num(d.installment))}</b>` : ''}</div>
+      <div class="debt-actions">
+        ${isNext ? `<button type="button" class="btn-sm accent" data-act="payDebt" data-id="${d.id}">${I.check} Ya pagué</button>` : ''}
+        ${isLastPaid ? `<button type="button" class="btn-sm" data-act="undoPay" data-id="${d.id}">Deshacer pago</button>` : ''}
+        <button type="button" class="btn-sm" data-act="editDebt" data-id="${d.id}">${I.edit} Editar</button>
+      </div></div>`;
+  };
+  const debtRows = m.debtItems.map(debtItemCard).join('');
 
   const expRows = m.exp.map((x) => `<button type="button" class="li" data-act="editExpense" data-id="${x.id}">
       <div class="li-main"><b>${esc(x.desc || x.cat)}</b><small>${esc(x.cat)} · ${fmtShort(x.date)}</small></div>
@@ -728,7 +744,6 @@ function viewDinero() {
       <div class="bar" aria-hidden="true"><i style="width:${outPct}%;background:var(--out)"></i><i style="width:${netPct}%;background:var(--in)"></i></div>
       <div class="flow-row flow-net"><span>Te queda</span><b class="${m.net < 0 ? 'out' : ''}">${money(m.net)}</b></div>
     </div>
-    ${debtLines ? `<div><div class="eyebrow" style="margin-bottom:4px">Cuotas en esta quincena</div><div class="list">${debtLines}</div></div>` : ''}
     ${recFields}
   </section>
 
@@ -744,8 +759,8 @@ function viewDinero() {
 
   <section class="card" aria-label="Deudas">
     <div class="sec-head"><h2>Deudas</h2><button type="button" class="btn-sm accent" data-act="addDebt">${I.plus} Agregar</button></div>
-    ${active.length ? active.map(debtCard).join('') : '<p class="empty">No tienes deudas registradas.</p>'}
-    ${done.length ? `<details><summary class="muted small" style="min-height:44px;display:flex;align-items:center;cursor:pointer">Deudas pagadas (${done.length})</summary><div style="display:flex;flex-direction:column;gap:10px">${done.map(debtCard).join('')}</div></details>` : ''}
+    ${debtRows || '<p class="empty">No hay cuotas en esta quincena.</p>'}
+    ${S.debts.length ? `<details><summary class="muted small" style="min-height:44px;display:flex;align-items:center;cursor:pointer">Todas mis deudas (${S.debts.length})</summary><div style="display:flex;flex-direction:column;gap:10px">${[...active, ...done].map(debtCard).join('')}</div></details>` : ''}
   </section>
 
   <section class="card" aria-label="Próximas quincenas">
