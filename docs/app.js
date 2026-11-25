@@ -729,7 +729,7 @@ function viewDinero() {
 
   <section class="card" aria-label="Ingresos extra">
     <div class="sec-head"><h2>Ingresos extra</h2><button type="button" class="btn-sm accent" data-act="addIncome">${I.plus} Agregar</button></div>
-    ${incRows ? `<div class="list">${incRows}</div>` : '<p class="empty">Plata de tu mamá, tutorías, trabajos de la U… anótala aquí.</p>'}
+    ${incRows ? `<div class="list">${incRows}</div>` : '<p class="empty">No hay ingresos en esta quincena.</p>'}
   </section>
 
   <section class="card" aria-label="Gastos">
