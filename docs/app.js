@@ -93,13 +93,15 @@ const DEFAULT_STATE = () => ({
     mode: 'hourly',          // 'hourly' (por horas) | 'salary' (sueldo fijo)
     salary: 0,               // sueldo mensual en pesos
     salaryFreq: 'biweekly',  // 'biweekly' (mitad el 15 y mitad el 30) | 'monthly' (todo el 30)
-    salaryStart: ''          // desde cuándo aplica el sueldo fijo
+    salaryStart: '',         // desde cuándo aplica el sueldo fijo
+    savingsGoal: 0           // meta del fondo de ahorro en pesos (0 = sin meta)
   },
   work: {},        // 'YYYY-MM-DD' -> { shift, noShift, breaks }
   received: {},    // clave de quincena trabajada (o 'sal-' + quincena) -> pesos que realmente llegaron
   receivedUsd: {}, // clave de quincena trabajada -> dólares que te pagaron (se revisa en Trabajo)
   incomes: [],     // ingresos extra: { id, date, desc, amount, src }
   expenses: [],    // { id, date, desc, amount, cat }
+  savings: [],     // fondo de ahorro: { id, date, desc, amount, type: 'in' (guardas) | 'out' (sacas) }
   debts: [],       // { id, name, installment, nextDate, freq, remaining, anchor, paid: [{ due, date, amount }] }
   routines: [],    // { id, name, focus, color, items: [{ exId, sets, reps, weight }] }
   exercises: {},   // id -> { id, name, muscle, img, custom }
@@ -299,8 +301,15 @@ function periodMoney(p, forProjection) {
   }
   debtItems.sort((a, b) => (a.date < b.date ? -1 : 1));
   const debtT = sum(debtItems, (x) => x.amount);
-  return { inc, exp, expT, debtItems, debtT, out: expT + debtT, net: inc.total - expT - debtT };
+  // Lo que guardas en el ahorro sale de la quincena; lo que sacas del ahorro vuelve a ella.
+  const sav = (S.savings || []).filter((x) => inRange(x.date, p)).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const savIn = sum(sav.filter((x) => x.type !== 'out'), (x) => num(x.amount));
+  const savOut = sum(sav.filter((x) => x.type === 'out'), (x) => num(x.amount));
+  const savT = savIn - savOut;
+  return { inc, exp, expT, debtItems, debtT, out: expT + debtT, sav, savIn, savOut, savT, net: inc.total - expT - debtT - savT };
 }
+// Total del fondo de ahorro (todo lo guardado menos todo lo sacado).
+const savingsTotal = (exceptId) => sum((S.savings || []).filter((x) => x.id !== exceptId), (x) => (x.type === 'out' ? -1 : 1) * num(x.amount));
 
 // ---------- Gym ----------
 const ROUTINE_COLORS = ['#ff8a3d', '#60a5fa', '#4ade80', '#c4a1ff', '#f9a8d4', '#facc15'];
@@ -685,9 +694,19 @@ function viewDinero() {
       <span>${x.kind === 'salary' ? `¿Cuánto te llegó el ${fmtShort(x.payOn)} de sueldo?` : `¿Cuántos pesos te llegaron por el pago del ${fmtShort(x.payOn)}?`} (opcional)</span>
       <div class="money-input"><input type="number" inputmode="numeric" min="0" step="1" placeholder="Si lo escribes, se usa en vez del cálculo" data-change="received" data-key="${x.key}" value="${S.received[x.key] != null ? esc(S.received[x.key]) : ''}"></div>
     </label>`).join('');
-  const total = Math.max(inc.total, m.out, 1);
+  const savBar = Math.max(0, m.savT);
+  const total = Math.max(inc.total, m.out + savBar, 1);
   const outPct = Math.min(100, (m.out / total) * 100);
-  const netPct = Math.max(0, ((inc.total - m.out) / total) * 100);
+  const savPct = Math.min(100 - outPct, (savBar / total) * 100);
+  const netPct = Math.max(0, (m.net / total) * 100);
+
+  // Fondo de ahorro
+  const savTotal = savingsTotal();
+  const goal = num(S.settings.savingsGoal);
+  const goalPct = goal > 0 ? Math.min(100, Math.max(0, (savTotal / goal) * 100)) : 0;
+  const savRows = m.sav.map((x) => `<button type="button" class="li" data-act="editSaving" data-id="${x.id}">
+      <div class="li-main"><b>${esc(x.desc || 'Ahorro')}</b><small>${x.type === 'out' ? 'Sacaste' : 'Guardaste'} · ${fmtShort(x.date)}</small></div>
+      <span class="amt ${x.type === 'out' ? 'out' : 'save'}">${x.type === 'out' ? '−' : '+'}${money(x.amount)}</span></button>`).join('');
   const incRows = inc.extras.map((x) => `<button type="button" class="li" data-act="editIncome" data-id="${x.id}">
       <div class="li-main"><b>${esc(x.desc || x.src)}</b><small>${esc(x.src)} · ${fmtShort(x.date)}</small></div>
       <span class="amt in">+${money(x.amount)}</span></button>`).join('');
@@ -737,7 +756,7 @@ function viewDinero() {
     projRows.push(`<tr class="${i === 0 ? 'current' : ''}">
       <td>${pLabel(pp)}${pays ? `<br><span class="est">pago ${pays}</span>` : ''}</td>
       <td class="in">${money(mm.inc.total)}${est ? '<br><span class="est">estimado</span>' : ''}</td>
-      <td class="out">${mm.out ? '−' + money(mm.out) : '—'}</td>
+      <td class="out">${mm.out + mm.savT ? '−' + money(mm.out + mm.savT) : '—'}${mm.savT ? `<br><span class="est">ahorro ${money(mm.savT)}</span>` : ''}</td>
       <td><b>${money(mm.net)}</b></td></tr>`);
     pp = pNext(pp);
   }
@@ -752,7 +771,9 @@ function viewDinero() {
       ${incLines || '<div class="flow-note">Sin ingresos en esta quincena</div>'}
       <div class="flow-row"><span>Sale</span><b class="out">−${money(m.out)}</b></div>
       <div class="flow-note">Gastos ${money(m.expT)} · Deudas ${money(m.debtT)}</div>
-      <div class="bar" aria-hidden="true"><i style="width:${outPct}%;background:var(--out)"></i><i style="width:${netPct}%;background:var(--in)"></i></div>
+      ${m.sav.length ? `<div class="flow-row"><span>Ahorro</span><b class="save">${m.savT >= 0 ? '−' : '+'}${money(Math.abs(m.savT))}</b></div>
+      <div class="flow-note">${[m.savIn ? `Guardaste ${money(m.savIn)}` : '', m.savOut ? `Sacaste ${money(m.savOut)}` : ''].filter(Boolean).join(' · ')}</div>` : ''}
+      <div class="bar" aria-hidden="true"><i style="width:${outPct}%;background:var(--out)"></i><i style="width:${savPct}%;background:var(--save)"></i><i style="width:${netPct}%;background:var(--in)"></i></div>
       <div class="flow-row flow-net"><span>Te queda</span><b class="${m.net < 0 ? 'out' : ''}">${money(m.net)}</b></div>
     </div>
     ${recFields}
@@ -772,6 +793,17 @@ function viewDinero() {
     <div class="sec-head"><h2>Deudas</h2><button type="button" class="btn-sm accent" data-act="addDebt">${I.plus} Agregar</button></div>
     ${debtRows || '<p class="empty">No hay cuotas en esta quincena.</p>'}
     ${S.debts.length ? `<details><summary class="muted small" style="min-height:44px;display:flex;align-items:center;cursor:pointer">Todas mis deudas (${S.debts.length})</summary><div style="display:flex;flex-direction:column;gap:10px">${[...active, ...done].map(debtCard).join('')}</div></details>` : ''}
+  </section>
+
+  <section class="card" aria-label="Ahorro">
+    <div class="sec-head"><h2>Ahorro</h2><button type="button" class="btn-sm accent" data-act="addSaving">${I.plus} Agregar</button></div>
+    <div class="save-head">
+      <div><div class="muted small">Llevas ahorrado</div><div class="big save">${money(savTotal)}</div></div>
+      <button type="button" class="btn-sm" data-act="editGoal">${goal > 0 ? `${I.edit} Meta` : `${I.plus} Ponerle meta`}</button>
+    </div>
+    ${goal > 0 ? `<div class="bar" aria-hidden="true"><i style="width:${goalPct}%;background:var(--save)"></i></div>
+    <div class="muted small">${Math.floor(goalPct)}% de tu meta de <b>${money(goal)}</b>${savTotal < goal ? ` · te faltan ${money(goal - savTotal)}` : ' · ¡la cumpliste!'}</div>` : ''}
+    ${savRows ? `<div class="list">${savRows}</div>` : '<p class="empty">No hay movimientos de ahorro en esta quincena.</p>'}
   </section>
 
   <section class="card" aria-label="Próximas quincenas">
@@ -799,6 +831,35 @@ function expenseForm(x) {
       <button type="submit" class="btn wide">Guardar</button>
       ${isNew ? '' : `<button type="button" class="btn danger wide" data-act="deleteExpense" data-id="${x.id}">${I.trash} Borrar gasto</button>`}
     </div>
+  </form>`;
+}
+
+function savingForm(x) {
+  const isNew = !x;
+  x = x || { date: inRange(todayIso(), ui.period) ? todayIso() : pStart(ui.period), type: 'in', amount: '', desc: '' };
+  return `<form data-submit="saveSaving" data-id="${x.id || ''}" style="display:flex;flex-direction:column;gap:14px">
+    <h2>${isNew ? 'Movimiento de ahorro' : 'Editar movimiento'}</h2>
+    <div class="field"><span>¿Qué hiciste?</span><div class="chips" role="group" aria-label="Tipo de movimiento">
+      <button type="button" class="chip" data-act="chip" data-name="type" data-val="in" aria-pressed="${x.type !== 'out'}">Guardé plata</button>
+      <button type="button" class="chip" data-act="chip" data-name="type" data-val="out" aria-pressed="${x.type === 'out'}">Saqué plata</button>
+    </div><input type="hidden" name="type" value="${esc(x.type)}"></div>
+    <label class="field"><span>Valor</span><div class="money-input"><input name="amount" type="number" inputmode="numeric" min="0" step="1" required value="${esc(x.amount)}" placeholder="0"></div></label>
+    <label class="field"><span>Descripción (opcional)</span><input name="desc" type="text" maxlength="60" value="${esc(x.desc)}" placeholder="Ej. fondo de emergencia, viaje"></label>
+    ${dateField('date', 'Fecha', x.date)}
+    <p class="muted small">Lo que guardas se resta de la plata de esa quincena; lo que sacas vuelve a ella.</p>
+    <div class="sheet-actions">
+      <button type="submit" class="btn wide">Guardar</button>
+      ${isNew ? '' : `<button type="button" class="btn danger wide" data-act="deleteSaving" data-id="${x.id}">${I.trash} Borrar movimiento</button>`}
+    </div>
+  </form>`;
+}
+function goalForm() {
+  const g = num(S.settings.savingsGoal);
+  return `<form data-submit="saveGoal" style="display:flex;flex-direction:column;gap:14px">
+    <h2>Meta de ahorro</h2>
+    <label class="field"><span>¿Cuánto quieres juntar?</span><div class="money-input"><input name="goal" type="number" inputmode="numeric" min="0" step="1" value="${g || ''}" placeholder="0"></div></label>
+    <p class="muted small">Déjalo vacío para no tener meta.</p>
+    <div class="sheet-actions"><button type="submit" class="btn wide">Guardar</button></div>
   </form>`;
 }
 
@@ -1212,6 +1273,14 @@ const ACT = {
     S.incomes = S.incomes.filter((e) => e.id !== el.dataset.id);
     save(); closeSheet(); render(); toast('Ingreso borrado');
   },
+  addSaving() { openSheet(savingForm(null)); },
+  editSaving(el) { const x = (S.savings || []).find((e) => e.id === el.dataset.id); if (x) openSheet(savingForm(x)); },
+  deleteSaving(el) {
+    if (!confirm('¿Borrar este movimiento de ahorro?')) return;
+    S.savings = (S.savings || []).filter((e) => e.id !== el.dataset.id);
+    save(); closeSheet(); render(); toast('Movimiento borrado');
+  },
+  editGoal() { openSheet(goalForm()); },
   addDebt() { openSheet(debtForm(null)); },
   editDebt(el) { const d = S.debts.find((x) => x.id === el.dataset.id); if (d) openSheet(debtForm(d)); },
   deleteDebt(el) {
@@ -1363,6 +1432,21 @@ const SUBMIT = {
     if (id) S.expenses = S.expenses.map((e) => (e.id === id ? x : e)); else S.expenses.push(x);
     ui.period = periodOf(x.date);
     save(); closeSheet(); render(); toast(id ? 'Gasto actualizado' : 'Gasto agregado');
+  },
+  saveSaving(form, fd) {
+    const id = form.dataset.id;
+    const x = { id: id || uid(), amount: Math.round(num(fd.get('amount'))), desc: String(fd.get('desc') || '').trim(), type: fd.get('type') === 'out' ? 'out' : 'in', date: fd.get('date') };
+    if (!x.amount) return toast('Escribe el valor');
+    const available = savingsTotal(id);
+    if (x.type === 'out' && x.amount > available) return toast(`Solo tienes ${money(available)} ahorrado`);
+    S.savings = S.savings || [];
+    if (id) S.savings = S.savings.map((e) => (e.id === id ? x : e)); else S.savings.push(x);
+    ui.period = periodOf(x.date);
+    save(); closeSheet(); render(); toast(x.type === 'out' ? 'Sacaste del ahorro' : 'Guardado en el ahorro');
+  },
+  saveGoal(form, fd) {
+    S.settings.savingsGoal = Math.max(0, Math.round(num(fd.get('goal'))));
+    save(); closeSheet(); render(); toast(S.settings.savingsGoal ? 'Meta guardada' : 'Meta quitada');
   },
   saveIncome(form, fd) {
     const id = form.dataset.id;

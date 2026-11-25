@@ -13,6 +13,7 @@
   --out: #ff7a7a;
   --warn: #fbbf24;
   --blue: #60a5fa;
+  --save: #60a5fa;
   --radius: 18px;
   --radius-sm: 12px;
   --tabbar-h: 68px;
@@ -56,6 +57,8 @@ b, strong { font-weight: 650; }
 .small { font-size: 13px; }
 .in { color: var(--in); }
 .out { color: var(--out); }
+.save { color: var(--save); }
+.save-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .num { font-variant-numeric: tabular-nums; }
 
 /* ---------- Tarjetas ---------- */
