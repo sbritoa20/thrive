@@ -29,6 +29,8 @@ const fmtLong = (s) => { const d = parse(s); return `${DOWL[d.getDay()]} ${d.get
 
 const copFmt = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0, minimumFractionDigits: 0 });
 const money = (n) => copFmt.format(Math.round(n || 0));
+const usdFmt = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const usd = (n) => usdFmt.format(Math.round((n || 0) * 100) / 100);
 const numFmt = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 });
 const fmtH = (h) => `${numFmt.format(Math.round(h * 100) / 100)} h`;
 
@@ -94,7 +96,8 @@ const DEFAULT_STATE = () => ({
     salaryStart: ''          // desde cuándo aplica el sueldo fijo
   },
   work: {},        // 'YYYY-MM-DD' -> { shift, noShift, breaks }
-  received: {},    // clave de quincena trabajada (o 'sal-' + quincena) -> monto que realmente llegó
+  received: {},    // clave de quincena trabajada (o 'sal-' + quincena) -> pesos que realmente llegaron
+  receivedUsd: {}, // clave de quincena trabajada -> dólares que te pagaron (se revisa en Trabajo)
   incomes: [],     // ingresos extra: { id, date, desc, amount, src }
   expenses: [],    // { id, date, desc, amount, cat }
   debts: [],       // { id, name, installment, nextDate, freq, remaining, anchor, paid: [{ due, date, amount }] }
@@ -155,15 +158,16 @@ ui.period = periodOf(today0);
 const rateCop = () => S.settings.rateUsd * S.settings.fx;
 function dayCalc(w) {
   w = w || {};
-  const r = rateCop();
+  const r = rateCop(), u = num(S.settings.rateUsd);
   const shift = num(w.shift), ns = num(w.noShift), br = num(w.breaks);
   const brH = (br * S.settings.breakMin) / 60;
   const hours = shift + ns;
   const paidHours = Math.max(0, hours - brH);
-  return { shift, ns, br, brH, hours, paidHours, pay: paidHours * r, shiftPay: shift * r, nsPay: ns * r, brPay: brH * r };
+  return { shift, ns, br, brH, hours, paidHours, pay: paidHours * r, shiftPay: shift * r, nsPay: ns * r, brPay: brH * r,
+    usd: paidHours * u, shiftUsd: shift * u, nsUsd: ns * u, brUsd: brH * u };
 }
 function periodWork(p) {
-  const t = { shift: 0, ns: 0, br: 0, brH: 0, hours: 0, paidHours: 0, pay: 0, shiftPay: 0, nsPay: 0, brPay: 0, days: 0 };
+  const t = { shift: 0, ns: 0, br: 0, brH: 0, hours: 0, paidHours: 0, pay: 0, shiftPay: 0, nsPay: 0, brPay: 0, usd: 0, shiftUsd: 0, nsUsd: 0, brUsd: 0, days: 0 };
   for (const [d, w] of Object.entries(S.work)) {
     if (!inRange(d, p)) continue;
     const c = dayCalc(w);
@@ -174,11 +178,12 @@ function periodWork(p) {
 }
 function paidVerdict(p) {
   const pw = periodWork(p);
-  const rec = S.received[pkey(p)];
+  // Se revisa en dólares, que es como te pagan.
+  const rec = S.receivedUsd[pkey(p)];
   if (rec == null || rec === '') return { state: 'none', pw };
-  const diff = num(rec) - pw.pay;
-  if (diff >= -500) return { state: 'ok', pw, diff };
-  const missingNs = pw.nsPay > 0 && -diff >= pw.nsPay * 0.85;
+  const diff = num(rec) - pw.usd;
+  if (diff >= -0.05) return { state: 'ok', pw, diff };
+  const missingNs = pw.nsUsd > 0 && -diff >= pw.nsUsd * 0.85;
   return { state: 'bad', pw, diff, missingNs };
 }
 
@@ -231,22 +236,28 @@ function incomeFor(p, forProjection) {
   //    anterior, y esa plata es la que tienes para esta.
   const worked = pPrev(pPrev(p));
   const hk = pkey(worked);
+  // Te pagan en dólares: en Trabajo se ve en USD y aquí se pasa a pesos con el dólar de Ajustes,
+  // salvo que escribas los pesos que de verdad te llegaron.
   const real = S.received[hk];
   const hasReal = real != null && real !== '';
-  const earned = periodWork(worked).pay;
+  const ru = S.receivedUsd[hk];
+  const hasUsd = ru != null && ru !== '';
+  const earned = periodWork(worked).usd;
   const hourlyOn = hourlyActiveFor(worked);
-  const estimate = S.settings.typicalHours * rateCop();
-  if (hourlyOn || earned > 0 || hasReal) {
-    let amount, tag;
-    if (hasReal) { amount = num(real); tag = 'real'; }
-    else if (pCmp(worked, cur) < 0) { amount = earned; tag = 'calculado'; }
+  const estimate = S.settings.typicalHours * num(S.settings.rateUsd);
+  if (hourlyOn || earned > 0 || hasReal || hasUsd) {
+    let dollars, tag;
+    if (hasUsd) { dollars = num(ru); tag = 'pesos aprox.'; }
+    else if (pCmp(worked, cur) < 0) { dollars = earned; tag = 'calculado'; }
     else if (pCmp(worked, cur) === 0) {
-      if (forProjection && hourlyOn && earned < estimate) { amount = estimate; tag = 'estimado'; }
-      else { amount = earned; tag = 'en curso'; }
-    } else { amount = hourlyOn ? estimate : earned; tag = hourlyOn ? 'estimado' : 'calculado'; }
+      if (forProjection && hourlyOn && earned < estimate) { dollars = estimate; tag = 'estimado'; }
+      else { dollars = earned; tag = 'en curso'; }
+    } else { dollars = hourlyOn ? estimate : earned; tag = hourlyOn ? 'estimado' : 'calculado'; }
+    const fx = num(S.settings.fx);
     parts.push({
-      kind: 'hourly', key: hk, amount, tag, worked, payOn: payDate(worked), label: 'Pago por horas',
-      note: `Pago del ${fmtShort(payDate(worked))} por lo trabajado del ${pLabel(worked)}`
+      kind: 'hourly', key: hk, usd: dollars, amount: hasReal ? num(real) : dollars * fx, tag: hasReal ? 'real' : tag,
+      worked, payOn: payDate(worked), label: 'Pago por horas',
+      note: `Pago del ${fmtShort(payDate(worked))} por lo trabajado del ${pLabel(worked)} · ${usd(dollars)}${hasReal ? '' : ` × ${money(fx)}`}`
     });
   }
 
@@ -516,8 +527,8 @@ function stepper(label, hint, field, display) {
 }
 
 function viewTrabajo() {
+  // En Trabajo todo va en dólares, que es como te pagan; en Dinero se pasa a pesos.
   const s = S.settings;
-  const r = rateCop();
   const d = ui.workDate;
   const c = dayCalc(S.work[d]);
   const p = ui.period;
@@ -543,16 +554,16 @@ function viewTrabajo() {
     if (x.br) parts.push(`${x.br} break${x.br > 1 ? 's' : ''}`);
     return `<button type="button" class="li" data-act="pickDay" data-date="${k}">
       <div class="li-main"><b>${fmtLong(k)}</b><small>${parts.join(' · ') || 'Sin horas'}</small></div>
-      <span class="amt">${money(x.pay)}</span>
+      <span class="amt">${usd(x.usd)}</span>
     </button>`;
   }).join('');
 
   // Verificación del pago
   const v = paidVerdict(p);
-  const recVal = S.received[pkey(p)];
+  const recVal = S.receivedUsd[pkey(p)];
   let verdict = '';
   if (v.state === 'ok') verdict = `<div class="verdict ok">${I.check}<div>Te pagaron completo${v.pw.ns ? ', incluidas las horas sin turno' : ''}.</div></div>`;
-  else if (v.state === 'bad') verdict = `<div class="verdict bad">${I.alert}<div>Te faltan <b>${money(-v.diff)}</b>.${v.missingNs ? ` Coincide con tus <b>${fmtH(v.pw.ns)}</b> sin turno: parece que no te las pagaron.` : ''}</div></div>`;
+  else if (v.state === 'bad') verdict = `<div class="verdict bad">${I.alert}<div>Te faltan <b>${usd(-v.diff)}</b>.${v.missingNs ? ` Coincide con tus <b>${fmtH(v.pw.ns)}</b> sin turno: parece que no te las pagaron.` : ''}</div></div>`;
 
   // Historial de horas sin turno
   const nsByP = {};
@@ -568,15 +579,15 @@ function viewTrabajo() {
     const pp = pFromKey(k);
     const vv = paidVerdict(pp);
     const badge = vv.state === 'ok' ? '<span class="badge ok">Pagadas</span>'
-      : vv.state === 'bad' ? `<span class="badge late">Faltan ${money(-vv.diff)}</span>`
+      : vv.state === 'bad' ? `<span class="badge late">Faltan ${usd(-vv.diff)}</span>`
       : '<span class="badge">Sin confirmar</span>';
-    return `<div class="li"><div class="li-main"><b>Quincena ${pLabel(pp)}</b><small>${fmtH(nsByP[k])} · ${money(nsByP[k] * r)}</small></div>${badge}</div>`;
+    return `<div class="li"><div class="li-main"><b>Quincena ${pLabel(pp)}</b><small>${fmtH(nsByP[k])} · ${usd(nsByP[k] * num(s.rateUsd))}</small></div>${badge}</div>`;
   }).join('');
 
   // Próximos pagos (quincena vencida: lo de esta quincena llega en la siguiente)
   const nextRows = nextPayments().map((x) => `<button type="button" class="li" data-act="goMoney" data-date="${x.payOn}" aria-label="Ver el pago del ${fmtLong(x.payOn)} en Dinero">
       <div class="li-main"><b>${fmtLong(x.payOn)}</b><small>${x.kind === 'salary' ? 'Sueldo' : `Por lo trabajado del ${pLabel(x.worked)}${x.tag === 'en curso' ? ' · sigue en curso' : ''}`}</small></div>
-      <span class="amt in">${money(x.amount)}</span><span class="chev" aria-hidden="true">${I.right}</span></button>`).join('');
+      <span class="amt in">${x.kind === 'hourly' ? usd(x.usd) : money(x.amount)}</span><span class="chev" aria-hidden="true">${I.right}</span></button>`).join('');
 
   const salaryView = salaryActive(p);
   const salaryCard = `<section class="card" aria-label="Sueldo de la quincena">
@@ -590,7 +601,7 @@ function viewTrabajo() {
 
   return `
   <header class="top">
-    <div><h1>Trabajo</h1><p class="sub">${isSalaryMode() ? `Sueldo fijo: ${money(s.salary)} al mes` : `${money(r)} por hora · ${numFmt.format(s.rateUsd)} USD × ${money(s.fx)}`}</p></div>
+    <div><h1>Trabajo</h1><p class="sub">${isSalaryMode() ? `Sueldo fijo: ${money(s.salary)} al mes` : `${usd(s.rateUsd)} por hora · en Dinero lo ves en pesos`}</p></div>
   </header>
 
   ${nextRows ? `<section class="card" aria-label="Próximos pagos" style="gap:6px">
@@ -607,7 +618,7 @@ function viewTrabajo() {
     </div>
     <div class="day-total">
       <div class="col"><div class="muted small">${isToday ? 'Hoy ganas' : 'Ese día ganaste'}</div><div class="faint small">${fmtH(c.paidHours)} pagadas${c.br ? ` · −${Math.round(c.brH * 60)} min de breaks` : ''}</div></div>
-      <strong class="num">${money(c.pay)}</strong>
+      <strong class="num">${usd(c.usd)}</strong>
     </div>
     ${isToday ? '' : '<button type="button" class="btn ghost" data-act="goToday">Volver a hoy</button>'}
   </section>
@@ -615,22 +626,22 @@ function viewTrabajo() {
   <section class="card" aria-label="Quincena">
     ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'pPrev', 'pNext')}
     <div>
-      <div class="big">${money(pw.pay)}</div>
+      <div class="big">${usd(pw.usd)}</div>
       <div class="muted small">Te lo pagan el <b>${fmtShort(pd)}</b> (quincena vencida) · ${status}</div>
     </div>
     <div class="stats">
-      <div class="stat"><span>Con turno</span><b>${fmtH(pw.shift)}</b><small>${money(pw.shiftPay)}</small></div>
-      <div class="stat"><span>Sin turno</span><b>${fmtH(pw.ns)}</b><small>${money(pw.nsPay)}</small></div>
-      <div class="stat"><span>Breaks</span><b>${pw.br}</b><small>−${Math.round(pw.brH * 60)} min · −${money(pw.brPay)}</small></div>
+      <div class="stat"><span>Con turno</span><b>${fmtH(pw.shift)}</b><small>${usd(pw.shiftUsd)}</small></div>
+      <div class="stat"><span>Sin turno</span><b>${fmtH(pw.ns)}</b><small>${usd(pw.nsUsd)}</small></div>
+      <div class="stat"><span>Breaks</span><b>${pw.br}</b><small>−${Math.round(pw.brH * 60)} min · −${usd(pw.brUsd)}</small></div>
       <div class="stat"><span>Días trabajados</span><b>${pw.days}</b><small>${fmtH(pw.paidHours)} pagadas</small></div>
     </div>
     <div class="row">
-      ${t >= pd && recVal == null && pw.pay > 0 ? `<button type="button" class="btn grow" data-act="confirmPay" data-key="${pkey(p)}" data-amount="${Math.round(pw.pay)}">${I.check} Ya me llegó</button>` : ''}
+      ${t >= pd && recVal == null && pw.usd > 0 ? `<button type="button" class="btn grow" data-act="confirmPay" data-key="${pkey(p)}" data-amount="${Math.round(pw.usd * 100) / 100}">${I.check} Ya me llegó</button>` : ''}
       <button type="button" class="btn ghost grow" data-act="goMoney" data-date="${pd}">Ver en Dinero ${I.right}</button>
     </div>
     <label class="field">
-      <span>¿Cuánto te llegó realmente? (opcional)</span>
-      <div class="money-input"><input type="number" inputmode="numeric" min="0" step="1" placeholder="Escribe lo que te consignaron" data-change="received" data-key="${pkey(p)}" value="${recVal != null ? esc(recVal) : ''}"></div>
+      <span>¿Cuántos dólares te pagaron? (opcional)</span>
+      <div class="money-input usd"><input type="number" inputmode="decimal" min="0" step="0.01" placeholder="Lo que dice tu pago en USD" data-change="receivedUsd" data-key="${pkey(p)}" value="${recVal != null ? esc(recVal) : ''}"></div>
     </label>
     ${verdict}
   </section>
@@ -671,7 +682,7 @@ function viewDinero() {
     + (inc.extraT ? `<div class="flow-sub"><span>Ingresos extra</span><b class="num">${money(inc.extraT)}</b></div>
       <div class="flow-note">${inc.extras.length} ingreso${inc.extras.length === 1 ? '' : 's'} en esta quincena</div>` : '');
   const recFields = inc.parts.map((x) => `<label class="field">
-      <span>¿Cuánto te llegó el ${fmtShort(x.payOn)}${x.kind === 'salary' ? ' de sueldo' : ''}? (opcional)</span>
+      <span>${x.kind === 'salary' ? `¿Cuánto te llegó el ${fmtShort(x.payOn)} de sueldo?` : `¿Cuántos pesos te llegaron por el pago del ${fmtShort(x.payOn)}?`} (opcional)</span>
       <div class="money-input"><input type="number" inputmode="numeric" min="0" step="1" placeholder="Si lo escribes, se usa en vez del cálculo" data-change="received" data-key="${x.key}" value="${S.received[x.key] != null ? esc(S.received[x.key]) : ''}"></div>
     </label>`).join('');
   const total = Math.max(inc.total, m.out, 1);
@@ -1181,8 +1192,8 @@ const ACT = {
   // Lleva a Dinero, a la quincena en que llega ese pago.
   goMoney(el) { ui.period = moneyP(el.dataset.date); setTab('dinero'); },
   confirmPay(el) {
-    S.received[el.dataset.key] = num(el.dataset.amount);
-    save(); render(); toast('Pago registrado en Dinero');
+    S.receivedUsd[el.dataset.key] = num(el.dataset.amount);
+    save(); render(); toast('Pago confirmado');
   },
   pPrev() { ui.period = pPrev(ui.period); syncWorkDate(); render(); },
   pNext() { ui.period = pNext(ui.period); syncWorkDate(); render(); },
@@ -1415,6 +1426,11 @@ const CHANGE = {
   received(el) {
     const k = el.dataset.key;
     if (el.value === '') delete S.received[k]; else S.received[k] = Math.round(num(el.value));
+    save(); render();
+  },
+  receivedUsd(el) {
+    const k = el.dataset.key;
+    if (el.value === '') delete S.receivedUsd[k]; else S.receivedUsd[k] = Math.round(num(el.value) * 100) / 100;
     save(); render();
   },
   setting(el) {

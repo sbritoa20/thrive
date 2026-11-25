@@ -154,6 +154,8 @@ b, strong { font-weight: 650; }
 .money-input { position: relative; }
 .money-input::before { content: "$"; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); }
 .money-input input { padding-left: 28px; }
+.money-input.usd::before { content: "US$"; }
+.money-input.usd input { padding-left: 50px; }
 
 /* Selector de fecha */
 .date-btn {
