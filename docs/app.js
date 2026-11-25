@@ -1439,6 +1439,14 @@ const SUBMIT = {
     if (!x.amount) return toast('Escribe el valor');
     const available = savingsTotal(id);
     if (x.type === 'out' && x.amount > available) return toast(`Solo tienes ${money(available)} ahorrado`);
+    if (x.type === 'in') {
+      // Solo se puede guardar lo que queda libre en esa quincena (sin contar este mismo movimiento si lo estás editando).
+      const p = periodOf(x.date);
+      const old = id && (S.savings || []).find((e) => e.id === id);
+      let free = periodMoney(p, false).net;
+      if (old && inRange(old.date, p)) free += (old.type === 'out' ? -1 : 1) * num(old.amount);
+      if (x.amount > free) return toast(free > 0 ? `En la quincena del ${pLabel(p)} solo te quedan ${money(free)}` : `En la quincena del ${pLabel(p)} no te queda plata para ahorrar`);
+    }
     S.savings = S.savings || [];
     if (id) S.savings = S.savings.map((e) => (e.id === id ? x : e)); else S.savings.push(x);
     ui.period = periodOf(x.date);
