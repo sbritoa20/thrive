@@ -107,6 +107,11 @@ b, strong { font-weight: 650; }
 .pnav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pnav .mid { text-align: center; flex: 1; }
 .pnav .title { font-size: 17px; font-weight: 700; }
+.now-btn {
+  margin-top: 6px; min-height: 30px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font-size: 13px; font-weight: 700;
+}
 
 /* ---------- Contadores ---------- */
 .stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
@@ -119,6 +124,7 @@ b, strong { font-weight: 650; }
   width: 48px; height: 48px; border-radius: 14px;
   border: 1px solid var(--line); background: var(--surface-2);
   font-size: 24px; line-height: 1; font-weight: 500;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .st-btn.plus { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 700; }
 .st-val { min-width: 62px; text-align: center; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }

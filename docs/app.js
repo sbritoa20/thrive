@@ -128,7 +128,8 @@ const today0 = todayIso();
 const ui = {
   tab: 'trabajo',
   workDate: today0,
-  period: null,
+  period: null,      // quincena que se ve en Dinero
+  workPeriod: null,  // quincena que se ve en Trabajo (va con el día)
   cal: { y: parse(today0).getFullYear(), m: parse(today0).getMonth() + 1 },
   routineId: null,
   pickerTab: 'lib',
@@ -157,6 +158,7 @@ function payDate(p) {
 // lo que llega el 15 es para el 16–fin de mes y lo que llega el 30 es para el 1–15 del mes siguiente.
 const moneyP = (date) => pNext(periodOf(date));
 ui.period = periodOf(today0);
+ui.workPeriod = periodOf(today0);
 
 // ---------- Cálculos de trabajo ----------
 const rateCop = () => S.settings.rateUsd * S.settings.fx;
@@ -515,10 +517,11 @@ function closeSheet(fromPop, replaceWith) {
   if (replaceWith) history.replaceState(replaceWith, '');
   else if (history.state && history.state.sheet) history.back();
 }
-function pnav(label, sub, prevAct, nextAct) {
+// nowBtn: { act, label } muestra un botón para volver a hoy / a la quincena actual.
+function pnav(label, sub, prevAct, nextAct, nowBtn) {
   return `<div class="pnav">
     <button type="button" class="icon-btn" data-act="${prevAct}" aria-label="Anterior">${I.left}</button>
-    <div class="mid"><div class="eyebrow">${sub}</div><div class="title">${label}</div></div>
+    <div class="mid"><div class="eyebrow">${sub}</div><div class="title">${label}</div>${nowBtn ? `<button type="button" class="now-btn" data-act="${nowBtn.act}">${nowBtn.label}</button>` : ''}</div>
     <button type="button" class="icon-btn" data-act="${nextAct}" aria-label="Siguiente">${I.right}</button>
   </div>`;
 }
@@ -542,7 +545,7 @@ function viewTrabajo() {
   const s = S.settings;
   const d = ui.workDate;
   const c = dayCalc(S.work[d]);
-  const p = ui.period;
+  const p = ui.workPeriod;
   const pw = periodWork(p);
   const t = todayIso();
   const pd = payDate(p);
@@ -601,8 +604,9 @@ function viewTrabajo() {
       <span class="amt in">${x.kind === 'hourly' ? usd(x.usd) : money(x.amount)}</span><span class="chev" aria-hidden="true">${I.right}</span></button>`).join('');
 
   const salaryView = salaryActive(p);
+  const isNowP = pkey(p) === pkey(periodOf(t));
   const salaryCard = `<section class="card" aria-label="Sueldo de la quincena">
-    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'pPrev', 'pNext')}
+    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'wpPrev', 'wpNext', isNowP ? null : { act: 'goToday', label: 'Quincena actual' })}
     <div>
       <div class="big">${money(salaryFor(p))}</div>
       <div class="muted small">${S.settings.salaryFreq === 'monthly' ? (p.h === 2 ? 'Sueldo del mes' : 'En esta quincena no hay pago: el sueldo llega a fin de mes') : 'Mitad del sueldo'} · se paga el <b>${fmtShort(salaryPayDate(p))}</b></div>
@@ -621,7 +625,7 @@ function viewTrabajo() {
   </section>` : ''}
 
   ${salaryView ? salaryCard : `<section class="card" aria-label="Registro del día">
-    ${pnav(dayLabel, isToday ? fmtLong(d) : 'Registro del día', 'dayPrev', 'dayNext')}
+    ${pnav(dayLabel, isToday ? fmtLong(d) : 'Registro del día', 'dayPrev', 'dayNext', isToday ? null : { act: 'goToday', label: 'Ir a hoy' })}
     <div>
       ${stepper('Horas con turno', 'De media en media hora', 'shift', fmtH(c.shift).replace(' h', ''))}
       ${stepper('Horas sin turno', 'Se cuentan aparte', 'noShift', fmtH(c.ns).replace(' h', ''))}
@@ -631,11 +635,10 @@ function viewTrabajo() {
       <div class="col"><div class="muted small">${isToday ? 'Hoy ganas' : 'Ese día ganaste'}</div><div class="faint small">${fmtH(c.paidHours)} pagadas${c.br ? ` · −${Math.round(c.brH * 60)} min de breaks` : ''}</div></div>
       <strong class="num">${usd(c.usd)}</strong>
     </div>
-    ${isToday ? '' : '<button type="button" class="btn ghost" data-act="goToday">Volver a hoy</button>'}
   </section>
 
   <section class="card" aria-label="Quincena">
-    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'pPrev', 'pNext')}
+    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'wpPrev', 'wpNext', isNowP ? null : { act: 'goToday', label: 'Quincena actual' })}
     <div>
       <div class="big">${usd(pw.usd)}</div>
       <div class="muted small">Te lo pagan el <b>${fmtShort(pd)}</b> (quincena vencida) · ${status}</div>
@@ -767,7 +770,7 @@ function viewDinero() {
   <header class="top"><div><h1>Dinero</h1><p class="sub">Lo que entra y sale en cada quincena</p></div></header>
 
   <section class="card" aria-label="Resumen de la quincena">
-    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'pPrev', 'pNext')}
+    ${pnav(pLabel(p) + ' ' + p.y, 'Quincena', 'pPrev', 'pNext', pkey(p) === pkey(periodOf(todayIso())) ? null : { act: 'goNowP', label: 'Quincena actual' })}
     <div class="flow">
       <div class="flow-row"><span>Entra</span><b class="in">+${money(inc.total)}</b></div>
       ${incLines || '<div class="flow-note">Sin ingresos en esta quincena</div>'}
@@ -1320,10 +1323,53 @@ function setTab(t) {
 function currentRoutine() { return routineById(ui.routineId); }
 // Al cambiar de quincena, el día que se edita queda dentro de esa quincena.
 function syncWorkDate() {
-  if (inRange(ui.workDate, ui.period)) return;
+  const p = ui.workPeriod;
+  if (inRange(ui.workDate, p)) return;
   const t = todayIso();
-  ui.workDate = inRange(t, ui.period) ? t : pEnd(ui.period) < t ? pEnd(ui.period) : pStart(ui.period);
+  ui.workDate = inRange(t, p) ? t : pEnd(p) < t ? pEnd(p) : pStart(p);
 }
+
+// Suma o resta en el registro del día (media hora, o un break). Devuelve si algo cambió.
+function stepWork(f, dir) {
+  const w = S.work[ui.workDate] || (S.work[ui.workDate] = { shift: 0, noShift: 0, breaks: 0 });
+  const inc = f === 'breaks' ? 1 : 0.5;
+  const max = f === 'breaks' ? 99 : 24;
+  const before = num(w[f]);
+  w[f] = Math.max(0, Math.min(max, before + dir * inc));
+  const changed = w[f] !== before;
+  if (!num(w.shift) && !num(w.noShift) && !num(w.breaks)) delete S.work[ui.workDate];
+  save(); render();
+  return changed;
+}
+
+// Dejar presionado + o −: después de un momento sigue sumando o restando solo, cada vez más rápido.
+let hold = null;
+function stopHold() { if (hold) { clearTimeout(hold.timer); hold = null; } }
+document.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-act="step"]');
+  if (!b || e.button > 0) return;
+  stopHold();
+  const f = b.dataset.field, dir = +b.dataset.dir;
+  const h = hold = { f, dir, repeated: false, timer: 0 };
+  const tick = (delay) => {
+    h.timer = setTimeout(() => {
+      if (hold !== h) return;
+      h.repeated = true;
+      if (!stepWork(f, dir)) { stopHold(); return; } // llegó a 0 o al máximo
+      tick(Math.max(70, delay * 0.85));
+    }, delay);
+  };
+  tick(400);
+});
+document.addEventListener('pointerup', (e) => {
+  if (!hold) return;
+  const h = hold; stopHold();
+  if (!h.repeated && e.target.closest('[data-act="step"]')) stepWork(h.f, h.dir); // toque normal
+});
+document.addEventListener('pointercancel', stopHold);
+window.addEventListener('blur', stopHold);
+document.addEventListener('visibilitychange', stopHold);
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-act="step"]')) e.preventDefault(); });
 
 const ACT = {
   closeSheet: () => closeSheet(),
@@ -1357,27 +1403,24 @@ const ACT = {
     inp.dispatchEvent(new Event('change', { bubbles: true }));
   },
   // Trabajo
-  step(el) {
-    const f = el.dataset.field, dir = +el.dataset.dir;
-    const w = S.work[ui.workDate] || (S.work[ui.workDate] = { shift: 0, noShift: 0, breaks: 0 });
-    const inc = f === 'breaks' ? 1 : 0.5;
-    const max = f === 'breaks' ? 99 : 24;
-    w[f] = Math.max(0, Math.min(max, num(w[f]) + dir * inc));
-    if (!num(w.shift) && !num(w.noShift) && !num(w.breaks)) delete S.work[ui.workDate];
-    save(); render();
-  },
-  dayPrev() { ui.workDate = addDays(ui.workDate, -1); ui.period = periodOf(ui.workDate); render(); },
-  dayNext() { ui.workDate = addDays(ui.workDate, 1); ui.period = periodOf(ui.workDate); render(); },
-  goToday() { ui.workDate = todayIso(); ui.period = periodOf(ui.workDate); render(); },
-  pickDay(el) { ui.workDate = el.dataset.date; ui.period = periodOf(ui.workDate); render(); scrollTo({ top: 0, behavior: 'smooth' }); },
+  step(el) { stepWork(el.dataset.field, +el.dataset.dir); },
+  dayPrev() { ui.workDate = addDays(ui.workDate, -1); ui.workPeriod = periodOf(ui.workDate); render(); },
+  dayNext() { ui.workDate = addDays(ui.workDate, 1); ui.workPeriod = periodOf(ui.workDate); render(); },
+  goToday() { ui.workDate = todayIso(); ui.workPeriod = periodOf(ui.workDate); render(); },
+  pickDay(el) { ui.workDate = el.dataset.date; ui.workPeriod = periodOf(ui.workDate); render(); scrollTo({ top: 0, behavior: 'smooth' }); },
   // Lleva a Dinero, a la quincena en que llega ese pago.
   goMoney(el) { ui.period = moneyP(el.dataset.date); setTab('dinero'); },
   confirmPay(el) {
     S.receivedUsd[el.dataset.key] = num(el.dataset.amount);
     save(); render(); toast('Pago confirmado');
   },
-  pPrev() { ui.period = pPrev(ui.period); syncWorkDate(); render(); },
-  pNext() { ui.period = pNext(ui.period); syncWorkDate(); render(); },
+  // Quincena en Trabajo (mueve también el día que se edita)
+  wpPrev() { ui.workPeriod = pPrev(ui.workPeriod); syncWorkDate(); render(); },
+  wpNext() { ui.workPeriod = pNext(ui.workPeriod); syncWorkDate(); render(); },
+  // Quincena en Dinero (no toca lo de Trabajo)
+  pPrev() { ui.period = pPrev(ui.period); render(); },
+  pNext() { ui.period = pNext(ui.period); render(); },
+  goNowP() { ui.period = periodOf(todayIso()); render(); },
   // Dinero
   addExpense() { openSheet(expenseForm(null)); },
   editExpense(el) { const x = S.expenses.find((e) => e.id === el.dataset.id); if (x) openSheet(expenseForm(x)); },
@@ -1744,6 +1787,7 @@ document.addEventListener('click', (e) => {
   const tab = e.target.closest('[data-tab]');
   if (tab) { setTab(tab.dataset.tab); return; }
   const el = e.target.closest('[data-act]');
+  if (el && el.dataset.act === 'step' && e.detail !== 0) return; // el toque ya lo manejó pointerdown/pointerup
   if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el, e);
 });
 document.addEventListener('change', (e) => {
