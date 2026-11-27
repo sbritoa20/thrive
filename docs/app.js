@@ -94,7 +94,8 @@ const DEFAULT_STATE = () => ({
     salary: 0,               // sueldo mensual en pesos
     salaryFreq: 'biweekly',  // 'biweekly' (mitad el 15 y mitad el 30) | 'monthly' (todo el 30)
     salaryStart: '',         // desde cuándo aplica el sueldo fijo
-    savingsGoal: 0           // meta del fondo de ahorro en pesos (0 = sin meta)
+    savingsGoal: 0,          // meta del fondo de ahorro en pesos (0 = sin meta)
+    restSec: 90              // descanso entre series en segundos (0 = sin descanso)
   },
   work: {},        // 'YYYY-MM-DD' -> { shift, noShift, breaks }
   received: {},    // clave de quincena trabajada (o 'sal-' + quincena) -> pesos que realmente llegaron
@@ -106,7 +107,7 @@ const DEFAULT_STATE = () => ({
   routines: [],    // { id, name, focus, color, items: [{ exId, sets, reps, weight }] }
   exercises: {},   // id -> { id, name, muscle, img, custom }
   gym: {},         // 'YYYY-MM-DD' -> id de rutina o 'libre'
-  workout: null,   // entrenamiento en curso: { routineId, name, date, start, ex: [{ exId, sets: [{ w, reps, done }] }] }
+  workout: null,   // entrenamiento en curso: { routineId, name, date, start, rest?: { end, total }, ex: [{ exId, sets: [{ w, reps, done }] }] }
   sessions: []     // entrenamientos terminados: { id, routineId, name, date, start, end, ex: [...] }
 });
 let S = DEFAULT_STATE();
@@ -951,12 +952,12 @@ function viewGym() {
   }
   const legend = S.routines.map((r) => `<span><i style="background:${r.color}"></i>${esc(r.name)}</span>`).join('');
 
-  const routines = S.routines.map((r) => {
+  const routines = S.routines.map((r, i) => {
     const thumbs = r.items.slice(0, 4).map((it) => {
       const ex = S.exercises[it.exId];
       return ex && ex.img ? `<img src="${esc(ex.img)}" alt="" loading="lazy">` : '<span class="ph"></span>';
     }).join('');
-    return `<button type="button" class="routine" data-act="openRoutine" data-id="${r.id}">
+    return `<button type="button" class="routine" data-act="openRoutine" data-id="${r.id}" data-sort-i="${i}">
       <span class="r-badge" style="background:${r.color}">${routineTag(r)}</span>
       <span class="li-main"><b>${esc(r.name)}</b><small>${esc(r.focus || 'Sin enfoque')} · ${r.items.length} ejercicio${r.items.length === 1 ? '' : 's'}</small></span>
       <span class="thumbs" aria-hidden="true">${thumbs}</span>
@@ -996,7 +997,8 @@ function viewGym() {
 
   <section class="card" aria-label="Rutinas">
     <div class="sec-head"><h2>Rutinas</h2><button type="button" class="btn-sm accent" data-act="addRoutine">${I.plus} Nueva</button></div>
-    ${routines || '<p class="empty">Crea tu primera rutina, por ejemplo «Rutina A · Pierna».</p>'}
+    ${routines ? `<div class="sortable" data-sort="routines">${routines}</div>
+    ${S.routines.length > 1 ? '<p class="faint small">Mantén presionada una rutina y arrástrala para cambiar el orden.</p>' : ''}` : '<p class="empty">Crea tu primera rutina, por ejemplo «Rutina A · Pierna».</p>'}
   </section>`;
 }
 
@@ -1109,7 +1111,7 @@ function viewRoutine(r) {
   const items = r.items.map((it, i) => {
     const ex = S.exercises[it.exId] || { name: 'Ejercicio', muscle: '' };
     const prev = lastSets(r.id, it.exId);
-    return `<div class="ex">
+    return `<div class="ex" data-sort-i="${i}">
       <div class="ex-head">
         <button type="button" class="ex-img" data-act="exPhoto" data-ex="${esc(it.exId)}" aria-label="Cambiar foto de ${esc(ex.name)}">${imgOrPh(ex.img, ex.name)}</button>
         <div class="grow">
@@ -1140,7 +1142,8 @@ function viewRoutine(r) {
     <button type="button" class="btn wide" data-act="wkStart">${I.dumbbell} Empezar entrenamiento</button>
     <div class="muted small">${other ? `Tienes ${esc(other.name)} en curso.` : ls ? `Última vez: ${fmtLong(ls.date)} · ${fmtMin(ls.end - ls.start)}` : 'Todavía no has entrenado esta rutina con el cronómetro.'}</div>
   </section>` : ''}
-  ${items || '<section class="card"><p class="empty">Agrega ejercicios desde la biblioteca o crea los tuyos con tu propia foto.</p></section>'}
+  ${items ? `<div class="sortable" data-sort="items">${items}</div>
+  ${r.items.length > 1 ? '<p class="faint small" style="text-align:center">Mantén presionado un ejercicio y arrástralo para cambiar el orden.</p>' : ''}` : '<section class="card"><p class="empty">Agrega ejercicios desde la biblioteca o crea los tuyos con tu propia foto.</p></section>'}
   <button type="button" class="btn wide" data-act="addExercise">${I.plus} Agregar ejercicio</button>`;
 }
 
@@ -1295,6 +1298,19 @@ function viewAjustes() {
       ${field('typicalHours', 'Horas normales por quincena', '0.5', 'Para estimar quincenas futuras')}
     </div>
   </section>
+  <section class="card" aria-label="Gym">
+    <div class="sec-head"><h2>Gym</h2></div>
+    <div class="field"><span>Descanso entre series</span>
+      <div class="chips" role="group" aria-label="Descanso entre series">
+        ${REST_OPTS.map((v) => `<button type="button" class="chip" data-act="setRest" data-val="${v}" aria-pressed="${num(s.restSec) === v}">${v ? restLabel(v) : 'Sin descanso'}</button>`).join('')}
+      </div>
+    </div>
+    <label class="field"><span>Otro tiempo (en segundos)</span>
+      <input type="number" inputmode="numeric" min="0" max="900" step="5" value="${esc(num(s.restSec))}" data-change="setting" data-key="restSec">
+    </label>
+    <p class="muted small">El descanso empieza cuando marcas una serie como hecha. Al terminar suena una campana corta, como un mensaje: no hay que apagar nada.</p>
+    <button type="button" class="btn ghost" data-act="testBell">Probar sonido</button>
+  </section>
   <section class="card" aria-label="Tus datos">
     <div class="sec-head"><h2>Tus datos</h2></div>
     <p class="muted small">Todo se guarda solo en este teléfono. Haz una copia de vez en cuando por si cambias de celular o borras el navegador.</p>
@@ -1310,7 +1326,8 @@ function viewAjustes() {
    ===================================================================== */
 const VIEWS = { trabajo: viewTrabajo, dinero: viewDinero, gym: viewGym, ajustes: viewAjustes };
 function render() {
-  $('#view').innerHTML = VIEWS[ui.tab]();
+  $('#view').innerHTML = VIEWS[ui.tab]() + restBar();
+  document.body.classList.toggle('resting', !!$('#restBar'));
   document.querySelectorAll('.tabbar button').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
 }
 function setTab(t) {
@@ -1327,6 +1344,182 @@ function syncWorkDate() {
   if (inRange(ui.workDate, p)) return;
   const t = todayIso();
   ui.workDate = inRange(t, p) ? t : pEnd(p) < t ? pEnd(p) : pStart(p);
+}
+
+// ---------- Descanso entre series ----------
+const REST_OPTS = [0, 30, 60, 90, 120, 180];
+function restLabel(v) {
+  v = Math.round(num(v));
+  if (v < 60) return `${v} s`;
+  const m = Math.floor(v / 60), x = v % 60;
+  return x ? `${m}:${pad(x)} min` : `${m} min`;
+}
+// Sonido: campana de boxeo hecha con Web Audio (no hace falta descargar nada). Suena una vez y se apaga sola.
+let audioCtx = null, bellNodes = [], bellFor = 0;
+function getAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!audioCtx) audioCtx = new AC();
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+function bellAt(ctx, t) {
+  const nodes = [];
+  const out = ctx.createGain();
+  out.gain.value = 0.32;
+  out.connect(ctx.destination);
+  nodes.push(out);
+  // Parciales inarmónicos de una campana metálica; dos golpes rápidos (ding-ding).
+  const partials = [[1, 1, 1.8], [2.01, 0.45, 1.2], [2.76, 0.6, 1.0], [3.9, 0.3, 0.6], [5.4, 0.22, 0.45], [6.8, 0.12, 0.3]];
+  for (const [delay, vol] of [[0, 1], [0.28, 0.85]]) {
+    const t0 = t + delay;
+    for (const [ratio, amp, decay] of partials) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 830 * ratio;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(amp * vol, t0 + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + decay);
+      o.connect(g); g.connect(out);
+      o.start(t0); o.stop(t0 + decay + 0.05);
+      nodes.push(o, g);
+    }
+  }
+  return nodes;
+}
+function cancelBell() {
+  for (const n of bellNodes) {
+    try { if (typeof n.stop === 'function') n.stop(); } catch {}
+    try { n.disconnect(); } catch {}
+  }
+  bellNodes = []; bellFor = 0;
+}
+// Se deja programada a la hora exacta, así suena aunque el celular retrase el reloj de la página.
+function scheduleBell(endMs) {
+  cancelBell();
+  const ctx = getAudio();
+  if (!ctx) return;
+  bellNodes = bellAt(ctx, ctx.currentTime + Math.max(0, (endMs - Date.now()) / 1000));
+  bellFor = endMs;
+}
+function playBell() { const ctx = getAudio(); if (ctx) bellAt(ctx, ctx.currentTime + 0.03); }
+function startRest() {
+  const sec = num(S.settings.restSec);
+  if (!S.workout || !(sec > 0)) return;
+  S.workout.rest = { end: Date.now() + sec * 1000, total: sec * 1000 };
+  scheduleBell(S.workout.rest.end);
+}
+function stopRest() { if (S.workout) delete S.workout.rest; cancelBell(); }
+function restBar() {
+  const r = S.workout && S.workout.rest;
+  const left = r ? r.end - Date.now() : 0;
+  if (left <= 0) return '';
+  return `<div class="rest-bar" id="restBar" role="timer" aria-label="Descanso entre series">
+    <div class="rest-top">
+      <div class="li-main"><span class="muted small">Descanso</span><b class="rest-left" id="restLeft">${fmtClock(left + 999)}</b></div>
+      <button type="button" class="btn-sm" data-act="restAdd" data-d="-15" aria-label="Quitar 15 segundos">−15 s</button>
+      <button type="button" class="btn-sm" data-act="restAdd" data-d="15" aria-label="Sumar 15 segundos">+15 s</button>
+      <button type="button" class="btn-sm accent" data-act="restSkip">Saltar</button>
+    </div>
+    <div class="bar" aria-hidden="true"><i id="restFill" style="width:${Math.min(100, (left / r.total) * 100)}%"></i></div>
+  </div>`;
+}
+function restTick() {
+  const r = S.workout && S.workout.rest;
+  const bar = $('#restBar');
+  if (!r) { if (bar) { bar.remove(); document.body.classList.remove('resting'); } return; }
+  const left = r.end - Date.now();
+  if (left > 0) {
+    if (!bar) { render(); return; }
+    $('#restLeft').textContent = fmtClock(left + 999);
+    $('#restFill').style.width = `${Math.min(100, (left / r.total) * 100)}%`;
+    return;
+  }
+  // Se acabó el descanso
+  const late = -left;
+  delete S.workout.rest;
+  save();
+  if (late < 4000) {
+    if (bellFor !== r.end) playBell(); // no estaba programada (por ejemplo, volviste a abrir la app)
+    if (navigator.vibrate) try { navigator.vibrate(180); } catch {}
+    toast('Descanso terminado: ¡a la siguiente serie!');
+  } else if (bellFor === r.end) cancelBell(); // ya pasó hace rato: que no suene tarde
+  bellNodes = []; bellFor = 0;
+  if (bar) bar.remove();
+  document.body.classList.remove('resting');
+}
+
+// ---------- Ordenar arrastrando (rutinas y ejercicios) ----------
+// Mantén presionado un elemento de una lista .sortable y arrástralo. Si mueves el dedo antes, es un scroll normal.
+let press = null, drag = null, dragJustEnded = false;
+function cancelPress() { if (press) { clearTimeout(press.timer); press = null; } }
+document.addEventListener('pointerdown', (e) => {
+  if (e.button > 0 || drag) return;
+  const item = e.target.closest('.sortable > [data-sort-i]');
+  if (!item || e.target.closest('input, select, textarea')) return;
+  cancelPress();
+  press = { item, x0: e.clientX, y0: e.clientY, y: e.clientY };
+  press.timer = setTimeout(() => { const p = press; press = null; if (p) startDrag(p.item, p.y); }, 380);
+});
+document.addEventListener('pointermove', (e) => {
+  if (press) {
+    press.y = e.clientY;
+    if (Math.abs(e.clientX - press.x0) > 10 || Math.abs(e.clientY - press.y0) > 10) cancelPress();
+  }
+  if (drag) moveDrag(e.clientY);
+});
+// Mientras arrastras, la pantalla no se desplaza con el dedo.
+document.addEventListener('touchmove', (e) => { if (drag && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('pointerup', () => { cancelPress(); endDrag(); });
+document.addEventListener('pointercancel', () => { cancelPress(); endDrag(); });
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.sortable')) e.preventDefault(); });
+// El toque que termina un arrastre no debe abrir la rutina ni ningún botón.
+document.addEventListener('click', (e) => {
+  if (!dragJustEnded) return;
+  dragJustEnded = false;
+  e.preventDefault(); e.stopPropagation();
+}, true);
+function startDrag(item, y) {
+  if (!item.isConnected) return;
+  const list = item.parentElement;
+  drag = { item, list, grab: y - item.getBoundingClientRect().top, y };
+  item.classList.add('dragging');
+  list.classList.add('sorting');
+  if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+  drag.scroller = setInterval(() => {
+    if (!drag) return;
+    const bottom = innerHeight - 140;
+    const v = drag.y < 90 ? -Math.ceil((90 - drag.y) / 6) : drag.y > bottom ? Math.ceil((drag.y - bottom) / 6) : 0;
+    if (v) { scrollBy(0, v); moveDrag(drag.y); }
+  }, 16);
+}
+function moveDrag(y) {
+  const { item, list } = drag;
+  drag.y = y;
+  const mid = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; };
+  let prev = item.previousElementSibling, next = item.nextElementSibling;
+  while (prev && y < mid(prev)) { list.insertBefore(prev, item.nextElementSibling); prev = item.previousElementSibling; }
+  while (next && y > mid(next)) { list.insertBefore(next, item); next = item.nextElementSibling; }
+  item.style.transform = '';
+  const natural = item.getBoundingClientRect().top;
+  item.style.transform = `translateY(${y - drag.grab - natural}px)`;
+}
+function endDrag() {
+  if (!drag) return;
+  const { item, list } = drag;
+  clearInterval(drag.scroller);
+  drag = null;
+  item.style.transform = '';
+  item.classList.remove('dragging');
+  list.classList.remove('sorting');
+  dragJustEnded = true;
+  setTimeout(() => { dragJustEnded = false; }, 500);
+  const order = [...list.children].filter((c) => c.dataset.sortI != null).map((c) => +c.dataset.sortI);
+  if (order.every((v, i) => v === i)) return;
+  if (list.dataset.sort === 'routines') S.routines = order.map((i) => S.routines[i]);
+  else if (list.dataset.sort === 'items') { const r = currentRoutine(); if (!r) return; r.items = order.map((i) => r.items[i]); }
+  save(); render();
 }
 
 // Suma o resta en el registro del día (media hora, o un break). Devuelve si algo cambió.
@@ -1523,8 +1716,11 @@ const ACT = {
     const st = w && w.ex[+el.dataset.e].sets[+el.dataset.s];
     if (!st) return;
     st.done = !st.done;
+    const allDone = w.ex.every((e) => e.sets.every((x) => x.done));
+    if (st.done && !allDone) startRest();
+    if (allDone) stopRest();
     save(); render();
-    if (st.done && w.ex.every((e) => e.sets.every((x) => x.done))) toast('¡Todas las series listas! Toca «Terminar rutina»');
+    if (st.done && allDone) toast('¡Todas las series listas! Toca «Terminar rutina»');
   },
   wkAddSet(el) {
     const e = S.workout && S.workout.ex[+el.dataset.e];
@@ -1551,6 +1747,7 @@ const ACT = {
     S.sessions = S.sessions || [];
     S.sessions.push({ id: uid(), routineId: w.routineId, name: w.name, date: w.date, start: w.start, end, ex: w.ex });
     S.gym[w.date] = w.routineId;
+    stopRest();
     S.workout = null;
     save(); render(); scrollTo(0, 0);
     const after = streak();
@@ -1558,9 +1755,24 @@ const ACT = {
   },
   wkCancel() {
     if (!S.workout || !confirm('¿Cancelar este entrenamiento? No se guardará nada de lo que llevas.')) return;
+    stopRest();
     S.workout = null;
     save(); render(); toast('Entrenamiento cancelado');
   },
+  // Descanso
+  restAdd(el) {
+    const r = S.workout && S.workout.rest;
+    if (!r) return;
+    r.end += num(el.dataset.d) * 1000;
+    const left = r.end - Date.now();
+    if (left <= 1000) return ACT.restSkip();
+    r.total = Math.max(r.total, left);
+    scheduleBell(r.end);
+    save(); restTick();
+  },
+  restSkip() { stopRest(); save(); render(); },
+  setRest(el) { S.settings.restSec = num(el.dataset.val); save(); render(); toast(S.settings.restSec ? `Descanso de ${restLabel(S.settings.restSec)}` : 'Sin descanso entre series'); },
+  testBell() { playBell(); },
   addExercise() { openSheet(pickerSheet()); if (ui.pickerTab === 'lib') renderLibResults(); },
   pickerTab(el) { ui.pickerTab = el.dataset.t; $('#sheetBody').innerHTML = pickerSheet(); if (ui.pickerTab === 'lib') renderLibResults(); },
   libGroup(el) {
@@ -1816,7 +2028,9 @@ window.addEventListener('popstate', () => {
 setInterval(() => {
   const el = document.getElementById('wkTimer');
   if (el && S.workout) el.textContent = fmtClock(Date.now() - S.workout.start);
-}, 1000);
+  restTick();
+}, 250);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) restTick(); });
 
 // ---------- Arranque ----------
 (async function boot() {
